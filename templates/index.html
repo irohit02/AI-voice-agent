@@ -1,182 +1,104 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>AI Voice Agent</title>
-    <style>
-        * {
-        box-sizing: border-box;
-    }
-        body {
-            margin: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1e3c72, #2a5298);
-            height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #fff;
-        }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Voice Agent</title>
+  <style>
+     * { box-sizing: border-box; }
+     body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: radial-gradient(1200px 800px at 20% -10%, rgba(0,198,255,0.25), transparent), radial-gradient(1200px 800px at 120% 20%, rgba(255,255,255,0.08), transparent), linear-gradient(135deg, #0f2027, #203a43 40%, #2c5364); color: #fff; display: flex; overflow: hidden; }
 
-        .container {
-            background-color: rgba(255, 255, 255, 0.1);
-            padding: 2rem;
-            border-radius: 20px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
-            width: 90%;
-            max-width: 500px;
-            text-align: center;
-            backdrop-filter: blur(10px);
-        }
+    /* Sidebar */
+    #sidebar { width: 220px; background: rgba(0,0,0,0.35); backdrop-filter: blur(8px); display: flex; flex-direction: column; padding: 1rem; border-right: 1px solid var(--card-border); }
+    #sidebar h2 { margin: 0 0 1rem 0; font-weight: 700; font-size: 1.5rem; text-align: center; color: var(--accent); user-select: none; }
+    #sidebar button { background: transparent; border: none; color: var(--text-dim); font-size: 1.1rem; padding: 0.75rem 1rem; margin-bottom: 0.5rem; border-radius: 8px; cursor: pointer; transition: background 0.3s, color 0.3s; text-align: left; }
+    #sidebar button.active, #sidebar button:hover { background: var(--accent); color: #001f33; font-weight: 700; }
 
-        h1 {
-            margin-bottom: 1rem;
-            font-size: 2rem;
-            color: #fff;
-        }
+    /* Main content */
+    #mainContent { flex-grow: 1; padding: 2rem; overflow-y: auto; background: rgba(255,255,255,0.06); border-radius: 0 20px 20px 0; box-shadow: 0 12px 30px rgba(0,0,0,0.25); display: flex; flex-direction: column; animation: fadeIn 1.2s ease; }
 
-        textarea {
-            width: 100%;
-            height: 120px;
-            padding: 1rem;
-            border-radius: 10px;
-            border: none;
-            resize: none;
-            font-size: 1rem;
-            margin-bottom: 1rem;
-            outline: none;
-        }
+    /* Header */
+    #headerBar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--card-border); }
+    #brandTitle { font-size: 1.6rem; color: #e6f4ff; letter-spacing: 0.3px; opacity: 0.95; font-weight: 600; }
+    #brandSubtitle { font-size: 1rem; color: var(--text-dim); opacity: 0.9; margin-top: 0.3rem; }
 
-        button {
-            padding: 0.8rem 2rem;
-            font-size: 1rem;
-            border: none;
-            border-radius: 50px;
-            background-color: #00c6ff;
-            background-image: linear-gradient(45deg, #0072ff, #00c6ff);
-            color: white;
-            cursor: pointer;
-            transition: 0.3s ease;
-        }
+    /* Tab sections */
+    .tab-section { display: none; flex-direction: column; width: 100%; }
+    .tab-section.active { display: flex; }
 
-        button:hover {
-            transform: scale(1.05);
-        }
+    /* Headings */
+    h1 { margin-bottom: 1.2rem; font-size: 2.2rem; color: #fff; user-select: none; }
+    .section-desc { margin-top: -0.5rem; margin-bottom: 1.8rem; color: var(--text-dim); line-height: 1.6; font-size: 1.05rem; max-width: 600px; }
 
-        audio {
-            margin-top: 1.5rem;
-            width: 100%;
-        }
+    /* Shared styles */
+    textarea { width: 100%; height: 120px; padding: 1rem; border-radius: 10px; border: none; resize: none; font-size: 1rem; margin-bottom: 1rem; outline: none; background: rgba(0,0,0,0.25); color: #e8f6ff; box-shadow: inset 0 0 0 1px var(--card-border); border: 1px solid transparent; transition: all 0.3s ease; font-family: inherit; }
+    textarea:focus { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 0 20px rgba(0,198,255,0.2); }
+    button.action-btn { padding: 0.8rem 2rem; font-size: 1rem; border: none; border-radius: 50px; background-image: linear-gradient(45deg, #0072ff, var(--accent)); color: white; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(0,198,255,0.4); user-select: none; margin-bottom: 1rem; align-self: flex-start; }
+    button.action-btn:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,198,255,0.6); }
+    button.action-btn:active { transform: translateY(-1px); }
+    audio { margin-top: 1rem; width: 100%; border-radius: 10px; outline: none; background: rgba(0,0,0,0.2); }
 
-        ::placeholder {
-            color: #aaa;
-        }
-    </style>
-    <style>
-    @keyframes fadeIn {
-        from {
-            opacity: 0;
-            transform: translateY(-10px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
+    /* Chat container */
+    #chatContainer { background: rgba(0,0,0,0.2); padding: 1.5rem; border-radius: 16px; height: 400px; overflow-y: auto; margin-top: 1rem; text-align: left; font-size: 0.98rem; display: flex; flex-direction: column; gap: 16px; border: 1px solid var(--card-border); }
+    #chatContainer::-webkit-scrollbar { width: 8px; }
+    #chatContainer::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 4px; margin: 4px 0; }
+    #chatContainer::-webkit-scrollbar-thumb { background: rgba(0,198,255,0.3); border-radius: 4px; border: 1px solid rgba(0,198,255,0.1); }
+    #chatContainer::-webkit-scrollbar-thumb:hover { background: rgba(0,198,255,0.5); }
+    #chatContainer { scrollbar-width: thin; scrollbar-color: rgba(0,198,255,0.3) rgba(255,255,255,0.05); }
+    .message { display: flex; align-items: flex-start; gap: 12px; animation: messageSlideIn 0.3s ease; }
+    .message.user { flex-direction: row-reverse; }
+    .avatar { width: 38px; height: 38px; border-radius: 50%; flex: 0 0 38px; background: linear-gradient(135deg, rgba(0,198,255,0.4), rgba(255,255,255,0.2)); display: grid; place-items: center; color: #001f33; font-weight: 800; border: 1px solid var(--card-border); font-size: 0.9rem; }
+    .message.bot .avatar { background: linear-gradient(135deg, rgba(255, 230, 94, 0.7), rgba(255,255,255,0.2)); color: #1d1d1d; }
+    .bubble { max-width: 75%; padding: 14px 16px; border-radius: 18px; line-height: 1.5; border: 1px solid var(--card-border); font-size: 0.95rem; word-wrap: break-word; }
+    .message.user .bubble { background: rgba(0,198,255,0.15); color: #e6f4ff; }
+    .message.bot .bubble { background: rgba(255,255,255,0.15); color: #f0f0f0; }
+    .bubble.typing { position: relative; padding-left: 12px; }
+    .bubble.typing::after { content: '...'; animation: blinkDots 1s steps(3, end) infinite; }
+    @keyframes blinkDots { 0%, 20% { color: transparent; } 40% { color: inherit; } 60% { color: transparent; } 100% { color: inherit; } }
 
-    body {
-        margin: 0;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background: linear-gradient(135deg, #1e3c72, #2a5298);
-        height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #fff;
-        animation: fadeIn 1s ease;
-    }
+    /* Status indicator & pulse */
+    #recordStatus { font-size: 1rem; margin-bottom: 10px; font-weight: 600; user-select: none; }
+    #recordStatus.recording { color: #ff4c4c; animation: pulse 1s infinite; }
+    #recordStatus.playing { color: #4caf50; animation: none; }
+    #recordStatus.idle { color: #ffffff; animation: none; }
+    @keyframes pulse { 0% { text-shadow: 0 0 5px rgba(255,76,76,0.6); } 50% { text-shadow: 0 0 15px rgba(255,76,76,1); } 100% { text-shadow: 0 0 5px rgba(255,76,76,0.6); } }
 
-    .container {
-        background: rgba(255, 255, 255, 0.1);
-        padding: 2rem;
-        border-radius: 20px;
-        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
-        width: 90%;
-        max-width: 500px;
-        text-align: center;
-        backdrop-filter: blur(10px);
-        animation: fadeIn 1.2s ease;
-    }
+    /* Fade in animation */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
-    h1 {
-        margin-bottom: 1.2rem;
-        font-size: 2.2rem;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        gap: 10px;
-        color: #fff;
-    }
-
-    textarea {
-        width: 100%;
-        height: 120px;
-        padding: 1rem;
-        border-radius: 10px;
-        border: none;
-        resize: none;
-        font-size: 1rem;
-        margin-bottom: 1rem;
-        outline: none;
-        box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
-    }
-
-    button {
-        padding: 0.8rem 2rem;
-        font-size: 1rem;
-        border: none;
-        border-radius: 50px;
-        background-image: linear-gradient(45deg, #0072ff, #00c6ff);
-        color: white;
-        cursor: pointer;
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-        box-shadow: 0 4px 10px rgba(0, 198, 255, 0.4);
-    }
-
-    button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 15px rgba(0, 198, 255, 0.6);
-    }
-
-    audio {
-        margin-top: 1.5rem;
-        width: 100%;
-    }
-
-    ::placeholder {
-        color: #aaa;
-    }
-    </style>
+    /* Enhancements */
+    :root { --card-border: rgba(255,255,255,0.12); --text-dim: #cdd7e1; --accent: #00c6ff; }
+    @keyframes messageSlideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎙️ AI Voice Agent</h1>
-        <textarea id="textInput" placeholder="Type something to convert into speech..."></textarea><br>
-        <button onclick="generateAudio()">Generate Audio</button>
-        <audio id="audioPlayer" controls></audio>
-        <h1>🎙️ Echo Bot</h1>
-        <button id="startBtn">Start Recording</button>
-        <button id="stopBtn" disabled>Stop Recording</button>
-        <div id="listeningStatus" style="display: none; margin-top: 10px;"><span style="color: red; font-weight: bold;">
-            🔴 Now listening...
-        </span></div>
-        <div id="uploadStatus" style="margin-top: 10px; font-weight: bold;"></div>
-        <p id="transcriptResult" style="margin-top: 10px;"></p>
-        <br><br>
-        <audio id="audioPlayback" controls></audio>
+  <div id="sidebar">
+    <h2>AI Voice Agent</h2>
+    <button id="tabAssistant" class="active">AI Assistant</button>
+  </div>
 
+  <div id="mainContent">
+    <div id="headerBar">
+      <div>
+        <div id="brandTitle">Your Real‑Time AI Voice Agent</div>
+        <div id="brandSubtitle">Talk, transcribe, and respond naturally with TTS + LLM.</div>
+      </div>
     </div>
 
-    <script src="/static/script.js"></script>
+    <section id="assistantSection" class="tab-section active">
+      <h1>🤖 AI Assistant</h1>
+      <p class="section-desc">Have a natural conversation. We remember context within your session and answer using LLM + TTS — clean chat‑style interface.</p>
+      
+      <!-- Status + Button -->
+      <div id="recordStatus" class="idle">⚪ Idle</div>
+      <button class="action-btn" id="recordButton">🎙 Start Recording</button>
+      
+      <!-- Chat -->
+      <div id="chatContainer"></div>
+      <audio id="assistantAudioPlayback"></audio>
+    </section>
+  </div>
+
+  <script src="/static/script.js"></script>
 </body>
 </html>
