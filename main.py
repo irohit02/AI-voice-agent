@@ -1,30 +1,61 @@
+# IT'S ALIIIIIVE! (hopefully)
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 from dotenv import load_dotenv
 from pathlib import Path
 import os
-import requests
-import shutil
-import assemblyai as aai
 import tempfile
 import aiofiles
-import google.generativeai as genai
 from typing import Dict, List
-from gtts import gTTS  # Day 11
+from gtts import gTTS
+import logging
 
-# Load env vars
-load_dotenv()
+from schemas import (
+    TextInput,
+    AudioGenerationResponse,
+    UploadResponse,
+    TranscriptionResponse,
+    EchoResponse,
+    LLMResponse,
+    ChatResponse,
+)
+from services.tts_service import generate_murf_audio
+from services.stt_service import transcribe_audio_file
+from services.llm_service import get_gemini_response
 
-# FastAPI app setup
+import logging
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from database import SessionLocal, engine
+import models
+
+models.Base.metadata.create_all(bind=engine)
+
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# --- VARS & CONFIG ---
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- FASTAPI SETUP ---
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For dev: allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,250 +64,210 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# API Keys
-MURF_API_KEY = os.getenv("MURF_API_KEY")
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-FALLBACK_AUDIO_URL = "/uploads/fallback_audio.mp3"
-
-# Configure Gemini
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-# In-memory chat history store
-chat_history: Dict[str, List[Dict[str, str]]] = {}
-
-# Uploads folder
 UPLOAD_FOLDER = "uploads"
 Path(UPLOAD_FOLDER).mkdir(exist_ok=True)
 
-# ----- MODELS -----
-class TextInput(BaseModel):
-    text: str
-class LLMRequest(BaseModel):
-    text: str
-
-# ----- HELPERS -----
-def _safe_requests_post(url: str, *, json: dict, headers: dict, timeout_seconds: int = 20):
-    try:
-        return requests.post(url, json=json, headers=headers, timeout=timeout_seconds)
-    except requests.Timeout as exc:
-        raise HTTPException(status_code=504, detail={"stage": "network", "message": f"Request to {url} timed out"}) from exc
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail={"stage": "network", "message": f"Request to {url} failed: {str(exc)}"}) from exc
-
-def _generate_murf_audio_or_fail(text: str) -> str:
-    if not MURF_API_KEY:
-        raise HTTPException(status_code=500, detail={"stage": "tts", "message": "Murf API Key not found"})
-
-    murf_url = "https://api.murf.ai/v1/speech/generate"
-    headers = {
-        "accept": "application/json",
-        "api-key": MURF_API_KEY,
-        "Authorization": f"Bearer {MURF_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "text": text,
-        "voiceId": "en-US-natalie",
-        "format": "mp3",
-    }
-
-    murf_response = _safe_requests_post(murf_url, json=payload, headers=headers)
-    try:
-        murf_response.raise_for_status()
-    except requests.HTTPError as exc:
-        try:
-            err_json = murf_response.json()
-        except Exception:
-            err_json = {"message": murf_response.text or "Unknown Murf error"}
-        raise HTTPException(status_code=502, detail={"stage": "tts", "message": "Murf request failed", "upstream": err_json}) from exc
-
-    try:
-        audio_url = murf_response.json().get("audioFile")
-    except ValueError:
-        audio_url = None
-
-    if not audio_url:
-        raise HTTPException(status_code=500, detail={"stage": "tts", "message": "No audio URL returned from Murf"})
-    return audio_url
-
-def _extract_gemini_text(llm_response) -> str:
-    output_text = getattr(llm_response, "text", None)
-    if not output_text and hasattr(llm_response, "candidates") and llm_response.candidates:
-        parts = llm_response.candidates[0].content.parts
-        if parts and hasattr(parts[0], "text"):
-            output_text = parts[0].text
-    return output_text or ""
-
-# ----- GLOBAL EXCEPTION HANDLERS -----
+# --- GLOBAL EXCEPTION HANDLERS ---
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     detail = exc.detail
     if not isinstance(detail, dict):
         detail = {"message": str(detail)}
+    logger.error(f"HTTP Exception: {exc.status_code} - {detail}")
     return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": detail})
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}")
     return JSONResponse(
         status_code=500,
         content={"ok": False, "error": {"message": "Internal server error"}},
     )
 
-# ===== Day 11: Robust Error Handling & Fallback =====
+# --- FALLBACK AUDIO ---
 FALLBACK_TEXT = "I'm having trouble connecting right now."
-FALLBACK_AUDIO_FILE = Path("uploads/fallback_audio.mp3")
+FALLBACK_AUDIO_FILE = Path(f"{UPLOAD_FOLDER}/fallback_audio.mp3")
+NO_SPEECH_TEXT = "I'm sorry, I couldn't hear you. Please try again."
+NO_SPEECH_AUDIO_FILE = Path(f"{UPLOAD_FOLDER}/no_speech_audio.mp3")
 
 if not FALLBACK_AUDIO_FILE.exists():
     try:
+        logger.info("Fallback audio not found. Generating a new one.")
         FALLBACK_AUDIO_FILE.parent.mkdir(parents=True, exist_ok=True)
         tts = gTTS(FALLBACK_TEXT)
         tts.save(FALLBACK_AUDIO_FILE)
-        print(f"[ERROR] Generated fallback audio at {FALLBACK_AUDIO_FILE}")
+        logger.info(f"Generated fallback audio at {FALLBACK_AUDIO_FILE}")
     except Exception as e:
-        print(f"[ERROR] Failed to generate fallback audio: {e}")
+        logger.error(f"Failed to generate fallback audio: {e}")
+
+if not NO_SPEECH_AUDIO_FILE.exists():
+    try:
+        logger.info("No speech fallback audio not found. Generating a new one.")
+        NO_SPEECH_AUDIO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tts = gTTS(NO_SPEECH_TEXT)
+        tts.save(NO_SPEECH_AUDIO_FILE)
+        logger.info(f"Generated no speech fallback audio at {NO_SPEECH_AUDIO_FILE}")
+    except Exception as e:
+        logger.error(f"Failed to generate no speech fallback audio: {e}")
 
 def _fallback_audio_response():
+    logger.warning("Serving up the fallback audio.")
     return FileResponse(FALLBACK_AUDIO_FILE, media_type="audio/mpeg")
 
-# ----- ROUTES -----
+def _no_speech_detected_response():
+    logger.warning("No speech detected. Serving up the specific fallback audio.")
+    return FileResponse(NO_SPEECH_AUDIO_FILE, media_type="audio/mpeg")
+
+
+# --- API ENDPOINTS ---
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
+    logger.info("Serving up the homepage.")
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/generate-audio")
-def generate_audio(input: TextInput):
+@app.post("/generate-audio", response_model=AudioGenerationResponse)
+def generate_audio_endpoint(input: TextInput):
     try:
+        logger.info(f"Generating audio for text: {input.text}")
         if not input.text or not input.text.strip():
             raise HTTPException(status_code=400, detail={"stage": "input", "message": "Text is required"})
-        audio_url = _generate_murf_audio_or_fail(input.text.strip())
+        audio_url = generate_murf_audio(input.text.strip())
         return {"ok": True, "audio_url": audio_url}
     except Exception as e:
-        print(f"[ERROR] generate-audio failed: {e}")
+        logger.error(f"generate-audio failed: {e}")
         return _fallback_audio_response()
 
-@app.post("/upload-audio")
+@app.post("/upload-audio", response_model=UploadResponse)
 async def upload_audio(file: UploadFile = File(...)):
     try:
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        logger.info(f"Uploading file: {file.filename} to {file_path}")
         async with aiofiles.open(file_path, "wb") as out_file:
             content = await file.read()
             await out_file.write(content)
         size_kb = round(Path(file_path).stat().st_size / 1024, 2)
+        logger.info(f"File uploaded successfully. Size: {size_kb} KB")
         return {
             "filename": file.filename,
             "content_type": file.content_type,
             "size_kb": size_kb
         }
     except Exception as e:
+        logger.error(f"File upload failed: {e}")
         raise HTTPException(status_code=500, detail={"stage": "upload", "message": f"Upload failed: {str(e)}"})
 
-@app.post("/transcribe/file")
-async def transcribe_audio(file: UploadFile = File(...)):
+@app.post("/transcribe/file", response_model=TranscriptionResponse)
+async def transcribe_audio_endpoint(file: UploadFile = File(...)):
     try:
-        if not ASSEMBLYAI_API_KEY:
-            raise HTTPException(status_code=500, detail={"stage": "stt", "message": "AssemblyAI API Key not found"})
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        temp_bytes = await file.read()
-        temp_file.write(temp_bytes)
-        temp_file.close()
-        transcript = transcriber.transcribe(temp_file.name)
-        os.remove(temp_file.name)
-        return {"ok": True, "transcript": transcript.text}
+        logger.info(f"Transcribing audio file: {file.filename}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_bytes = await file.read()
+            temp_file.write(temp_bytes)
+            temp_file_path = temp_file.name
+        
+        transcript_text = transcribe_audio_file(temp_file_path)
+        os.remove(temp_file_path)
+        
+        return {"ok": True, "transcript": transcript_text}
     except Exception as e:
-        print(f"[ERROR] STT failed: {e}")
+        logger.error(f"STT failed: {e}")
         return _fallback_audio_response()
 
-@app.post("/tts/echo")
+@app.post("/tts/echo", response_model=EchoResponse)
 async def echo_with_murf(file: UploadFile = File(...)):
     try:
-        if not ASSEMBLYAI_API_KEY or not MURF_API_KEY:
-            raise HTTPException(status_code=500, detail={"stage": "config", "message": "Missing API keys"})
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        temp_bytes = await file.read()
-        temp_file.write(temp_bytes)
-        temp_file.close()
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(temp_file.name)
-        os.remove(temp_file.name)
-        audio_url = _generate_murf_audio_or_fail(transcript.text)
-        return {"ok": True, "audio_url": audio_url, "transcript": transcript.text}
+        logger.info(f"Echoing audio file: {file.filename}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_bytes = await file.read()
+            temp_file.write(temp_bytes)
+            temp_file_path = temp_file.name
+        
+        transcript_text = transcribe_audio_file(temp_file_path)
+        os.remove(temp_file_path)
+        
+        logger.info(f"Echoing back: {transcript_text}")
+        audio_url = generate_murf_audio(transcript_text)
+        return {"ok": True, "audio_url": audio_url, "transcript": transcript_text}
     except Exception as e:
-        print(f"[ERROR] Echo TTS failed: {e}")
+        logger.error(f"Echo TTS failed: {e}")
         return _fallback_audio_response()
 
-@app.post("/llm/query")
+@app.post("/llm/query", response_model=LLMResponse)
 async def llm_query(file: UploadFile = File(...)):
     try:
-        if not GEMINI_API_KEY or not ASSEMBLYAI_API_KEY or not MURF_API_KEY:
-            raise HTTPException(status_code=500, detail={"stage": "config", "message": "Missing one or more API keys"})
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        temp_bytes = await file.read()
-        temp_file.write(temp_bytes)
-        temp_file.close()
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(temp_file.name)
-        os.remove(temp_file.name) 
-        user_text = transcript.text
+        logger.info(f"Running the full LLM query pipeline for file: {file.filename}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_bytes = await file.read()
+            temp_file.write(temp_bytes)
+            temp_file_path = temp_file.name
+            
+        user_text = transcribe_audio_file(temp_file_path)
+        os.remove(temp_file_path)
+
         if not user_text:
-            raise HTTPException(status_code=400, detail={"stage": "stt", "message": "No speech detected in audio"})
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        llm_response = model.generate_content(user_text)
-        output_text = _extract_gemini_text(llm_response)
-        if not output_text:
-            output_text = "No text returned from Gemini API."
-        short_text = output_text[:3000]
-        audio_url = _generate_murf_audio_or_fail(short_text)
+            return _no_speech_detected_response()
+        
+        logger.info(f"User said: {user_text}")
+
+        output_text = get_gemini_response(user_text)
+        
+        short_text = output_text[:3000] # Murf has a character limit
+        audio_url = generate_murf_audio(short_text)
         return {"ok": True, "transcript": user_text, "llm_response": output_text, "audio_url": audio_url}
     except Exception as e:
-        print(f"[ERROR] LLM pipeline failed: {e}")
+        logger.error(f"LLM pipeline failed: {e}")
         return _fallback_audio_response()
 
-@app.post("/agent/chat/{session_id}")
-async def agent_chat(session_id: str, file: UploadFile = File(...)):
+# --- DATABASE CHAT ---
+
+@app.post("/agent/chat/{session_id}", response_model=ChatResponse)
+async def agent_chat(session_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     try:
-        if not GEMINI_API_KEY or not ASSEMBLYAI_API_KEY or not MURF_API_KEY:
-            raise HTTPException(status_code=500, detail={"stage": "config", "message": "Missing one or more API keys"})
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        temp_bytes = await file.read()
-        temp_file.write(temp_bytes)
-        temp_file.close()
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(temp_file.name)
-        os.remove(temp_file.name)
-        user_text = transcript.text.strip()
+        logger.info(f"Agent chat for session: {session_id}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_bytes = await file.read()
+            temp_file.write(temp_bytes)
+            temp_file_path = temp_file.name
+            
+        user_text = transcribe_audio_file(temp_file_path).strip()
+        os.remove(temp_file_path)
+
         if not user_text:
-            raise HTTPException(status_code=400, detail={"stage": "stt", "message": "No speech detected in audio"})
-        if session_id not in chat_history:
-            chat_history[session_id] = []
-        chat_history[session_id].append({"role": "user", "content": user_text})
+            return _no_speech_detected_response()
+
+        db_history = db.query(models.ChatHistory).filter(models.ChatHistory.session_id == session_id).all()
+        
         conversation_text = ""
-        for msg in chat_history[session_id]:
-            prefix = "User: " if msg["role"] == "user" else "Assistant: "
-            conversation_text += prefix + msg["content"] + "\n"
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        llm_response = model.generate_content(conversation_text)
-        output_text = _extract_gemini_text(llm_response)
-        if not output_text:
-            output_text = "I couldn't generate a response."
-        chat_history[session_id].append({"role": "assistant", "content": output_text})
+        for msg in db_history:
+            prefix = "User: " if msg.role == "user" else "Assistant: "
+            conversation_text += prefix + msg.content + "\n"
+            
+        conversation_text += "User: " + user_text + "\n"
+            
+        logger.info(f"Sending this to Gemini: {conversation_text}")
+
+        output_text = get_gemini_response(conversation_text)
+
+        db.add(models.ChatHistory(session_id=session_id, role="user", content=user_text))
+        db.add(models.ChatHistory(session_id=session_id, role="assistant", content=output_text))
+        db.commit()
+
+        logger.info(f"Gemini responded with: {output_text}")
+
         short_text = output_text[:3000]
-        audio_url = _generate_murf_audio_or_fail(short_text)
+        audio_url = generate_murf_audio(short_text)
+
+        updated_history = db.query(models.ChatHistory).filter(models.ChatHistory.session_id == session_id).all()
+
         return {
             "ok": True,
             "session_id": session_id,
             "transcript": user_text,
             "llm_response": output_text,
             "audio_url": audio_url,
-            "history": chat_history[session_id],
+            "history": [{"role": msg.role, "content": msg.content} for msg in updated_history],
         }
     except Exception as e:
-        print(f"[ERROR] Agent chat failed: {e}")
+        logger.error(f"Agent chat failed: {e}")
         return _fallback_audio_response()

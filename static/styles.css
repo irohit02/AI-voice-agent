@@ -1,0 +1,134 @@
+
+    :root {
+      --background-color: #1a1a1a;
+      --text-color: #f0f0f0;
+      --user-message-bg: #333333;
+      --bot-message-bg: #222222;
+      --accent-color: #4caf50;
+      --input-bg: #2a2a2a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body, html {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-color);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #chat-container {
+      width: 100%;
+      max-width: 800px;
+      height: 90vh;
+      display: flex;
+      flex-direction: column;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      background-color: var(--bot-message-bg);
+    }
+
+    #message-window {
+      flex-grow: 1;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      max-width: 80%;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .message.user {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+
+    .message .bubble {
+      padding: 12px 16px;
+      border-radius: 18px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+
+    .message.user .bubble {
+      background-color: var(--user-message-bg);
+    }
+
+    .message.bot .bubble {
+      background-color: var(--bot-message-bg);
+    }
+    
+    .message.bot.typing {
+        align-self: flex-start;
+    }
+
+    .message.bot.typing .bubble {
+      background-color: transparent;
+      color: var(--text-color);
+      position: relative;
+      padding-left: 12px;
+    }
+    
+    .message.bot.typing .bubble::after {
+        content: '...';
+        animation: blinkDots 1s steps(3, end) infinite;
+    }
+    
+    @keyframes blinkDots { 
+        0%, 20% { color: transparent; } 
+        40% { color: inherit; } 
+        60% { color: transparent; } 
+        100% { color: inherit; } 
+    }
+
+    #input-area {
+      padding: 20px;
+      border-top: 1px solid #333;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #record-button {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      border: none;
+      background-color: var(--accent-color);
+      color: white;
+      font-size: 24px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    #record-button.recording {
+      background-color: #f44336;
+    }
+
+    #status-indicator {
+      flex-grow: 1;
+      text-align: center;
+      font-style: italic;
+      color: #999;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
